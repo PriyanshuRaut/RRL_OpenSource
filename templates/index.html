@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>RRL Playground</title>
+  <style>
+    body { font-family: system-ui, Arial; margin: 16px; }
+    textarea { width: 100%; height: 320px; font-family: monospace; font-size: 14px; }
+    pre { background:#111; color:#eee; padding:10px; min-height:80px; }
+    .row { display:flex; gap:12px; margin-top:8px; }
+    .col { flex:1; }
+  </style>
+</head>
+<body>
+  <h2>RRL Playground (localhost)</h2>
+  <textarea id="code">
+# demo
+display("hello rrl")
+def drive_forward(m)
+  robot.move(m)
+  display("moved", m)
+enddef
+
+display("robot start:", robot.position)
+drive_forward(0.5)
+display("robot end:", robot.position)
+  </textarea>
+  <div class="row">
+    <div class="col">
+      <button id="run">Run</button>
+      <button id="clear">Clear Output</button>
+      <div>
+        <h3>Output</h3>
+        <pre id="output"></pre>
+      </div>
+    </div>
+    <div style="width:320px">
+      <h3>Robot</h3>
+      <pre id="robot"></pre>
+    </div>
+  </div>
+<script>
+document.getElementById("run").onclick = async () => {
+  const code = document.getElementById("code").value;
+  const res = await fetch("/run", {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({code})
+  });
+  const data = await res.json();
+  const outEl = document.getElementById("output");
+  const robotEl = document.getElementById("robot");
+  if (!data.ok) {
+    outEl.textContent = "Error: " + (data.error || "unknown");
+    robotEl.textContent = "";
+    return;
+  }
+  outEl.textContent = data.output.join("\n");
+  robotEl.textContent = JSON.stringify(data.robot, null, 2);
+};
+document.getElementById("clear").onclick = () => {
+  document.getElementById("output").textContent = "";
+  document.getElementById("robot").textContent = "";
+};
+</script>
+</body>
+</html>
