@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
-# rrl_v0.3_transpile_fixed.py — RRL
 from __future__ import annotations
 import sys
 import math
 import traceback
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
+
+#RRL : Basic Language Logic
 
 # ========== Safe eval env ==========
 SAFE_BUILTINS = {
@@ -141,6 +141,15 @@ class Parser:
                 nodes.append(self.parse_if())
                 continue
 
+            if lower.startswith("not "):
+                nodes.append(Expr(line=line_no,expr=line))
+                self.advance()
+                continue
+
+            if lower.startswith("or "):
+                nodes.append(self.parse_or())
+                continue
+
             if lower.startswith("repeat "):
                 nodes.append(self.parse_repeat())
                 continue
@@ -208,6 +217,13 @@ class Parser:
                 raise ParserError(f"[line {line_no}] Expected elif/else/endif, got: {line}")
         raise ParserError(f"[line {start_line}] if-block not closed")
 
+    def parse_or(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)
+
     def parse_repeat(self) -> RepeatBlock:
         start_line, raw = self.current()
         header = strip_comment(raw).strip()
@@ -248,23 +264,23 @@ class Parser:
             self.advance()
             return ClassDef(line=start_line, name=name, bases=bases, body=body)
         raise ParserError(f"[line {start_line}] class-block not closed with endclass")
-
-        start_line, raw = self.current()
-        header = strip_comment(raw).strip()
-        name = header
-        bases: List[str] = []
-        if "(" in header and header.endswith(")"):
-            name = header.split("(", 1)[0].strip()
-            bases_str = header[header.find("(")+1:-1].strip()
-            bases = [b.strip() for b in bases_str.split(",") if b.strip()]
-        if not name.isidentifier():
-            raise ParserError(f"[line {start_line}] invalid class name: {name}")
-        self.advance()
-        body = self.parse_block(stop_tokens=["endclass"])
-        if self.i < len(self.lines) and strip_comment(self.lines[self.i]).strip().lower() == "endclass":
-            self.advance()
-            return ClassDef(line=start_line, name=name, bases=bases, body=body)
-        raise ParserError(f"[line {start_line}] class-block not closed with endclass")
+        
+        # start_line, raw = self.current()
+        # header = strip_comment(raw).strip()
+        # name = header
+        # bases: List[str] = []
+        # if "(" in header and header.endswith(")"):
+        #     name = header.split("(", 1)[0].strip()
+        #     bases_str = header[header.find("(")+1:-1].strip()
+        #     bases = [b.strip() for b in bases_str.split(",") if b.strip()]
+        # if not name.isidentifier():
+        #     raise ParserError(f"[line {start_line}] invalid class name: {name}")
+        # self.advance()
+        # body = self.parse_block(stop_tokens=["endclass"])
+        # if self.i < len(self.lines) and strip_comment(self.lines[self.i]).strip().lower() == "endclass":
+        #     self.advance()
+        #     return ClassDef(line=start_line, name=name, bases=bases, body=body)
+        # raise ParserError(f"[line {start_line}] class-block not closed with endclass")
 
     def parse_def(self) -> FunctionDef:
         start_line, raw = self.current()
@@ -290,7 +306,7 @@ class Parser:
             return FunctionDef(line=start_line, name=name, params=params, body=body)
         raise ParserError(f"[line {start_line}] def-block not closed with enddef")
 
-# ========== Runtime (interpreter preserved) ==========
+# ========== Runtime (interpreter) ==========
 class RRLRuntimeError(Exception):
     pass
 
@@ -298,6 +314,7 @@ class ReturnSignal(Exception):
     def __init__(self, value):
         self.value = value
 
+#RRL : Rototics domain
 class RobotSim:
     def __init__(self):
         self.x = 0.0
@@ -670,7 +687,7 @@ def run_rrl_file(filename: str, capture_output: Optional[List[str]] = None, tran
     return run_rrl_code(code, capture_output=capture_output, transpile=transpile)
 
 # ========== REPL ==========
-BANNER = """RRL v0.3 — RRL (transpile mode)
+BANNER = """RRL v0.3 — Raut Robotics Language (transpile mode)
 Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, def/enddef, class/endclass
 Use display(...) for output. Type :help for help, :env to see variables, :quit to exit.
 """
