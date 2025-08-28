@@ -185,5 +185,3 @@ This will generate an `rrl.exe` file inside the `dist` folder.
     ```sh
     rrl.exe filename.rrl
     ```
-
-```

@@ -670,7 +670,7 @@ def run_rrl_file(filename: str, capture_output: Optional[List[str]] = None, tran
     return run_rrl_code(code, capture_output=capture_output, transpile=transpile)
 
 # ========== REPL ==========
-BANNER = """RRL v0.3 — Raut Robotics Language (transpile mode)
+BANNER = """RRL v0.3 — RRL (transpile mode)
 Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, def/enddef, class/endclass
 Use display(...) for output. Type :help for help, :env to see variables, :quit to exit.
 """
