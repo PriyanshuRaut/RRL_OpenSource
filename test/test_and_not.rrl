@@ -1,0 +1,8 @@
+x = 1
+y = 0
+display("x and y:", x and y)
+display("not x:", not x)
+display("not y:", not y)
+and x y
+not x
+not y

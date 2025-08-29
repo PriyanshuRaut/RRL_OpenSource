@@ -150,6 +150,14 @@ class Parser:
                 nodes.append(self.parse_or())
                 continue
 
+            if lower.startswith("and "):
+                nodes.append(self.parse_and())
+                continue
+
+            if lower.startswith("not "):
+                nodes.append(self.parse_not())
+                continue
+
             if lower.startswith("repeat "):
                 nodes.append(self.parse_repeat())
                 continue
@@ -218,6 +226,20 @@ class Parser:
         raise ParserError(f"[line {start_line}] if-block not closed")
 
     def parse_or(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)
+
+    def parse_and(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)    
+
+    def parse_not(self) -> Expr:
         start_line, raw = self.current()
         header = strip_comment(raw).strip()
         expr = header
