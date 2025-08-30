@@ -185,3 +185,11 @@ This will generate an `rrl.exe` file inside the `dist` folder.
     ```sh
     rrl.exe filename.rrl
     ```
+
+---
+
+## License
+
+RRL is released under the **MIT License**.
+
+---
