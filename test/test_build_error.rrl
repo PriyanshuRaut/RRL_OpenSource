@@ -1,0 +1,13 @@
+class Rect
+    def __init__(w, h)
+        self.w = w
+        self.h = h
+    enddef
+    
+    def area()
+        return self.w * self.h
+    enddef
+endclass
+
+r = Rect(3,4)
+display(r.area())
