@@ -15,6 +15,7 @@ SAFE_BUILTINS = {
     "enumerate": enumerate, "zip": zip, "sum": sum, "any": any, "all": all,
     "sorted": sorted, "reversed": reversed,
     "setattr": setattr, "getattr": getattr, "hasattr": hasattr,
+    "object": object, "__name__": "__main__",
 }
 SAFE_GLOBALS = {"__builtins__": SAFE_BUILTINS, "math": math}
 
