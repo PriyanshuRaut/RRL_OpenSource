@@ -15,6 +15,7 @@ SAFE_BUILTINS = {
     "enumerate": enumerate, "zip": zip, "sum": sum, "any": any, "all": all,
     "sorted": sorted, "reversed": reversed,
     "setattr": setattr, "getattr": getattr, "hasattr": hasattr,
+    "object": object, "__name__": "__main__",
 }
 SAFE_GLOBALS = {"__builtins__": SAFE_BUILTINS, "math": math}
 
@@ -626,7 +627,29 @@ def transpile_program(prog: Program) -> str:
         out.extend(transpile_node(node, level=0))
     return "\n".join(out) + "\n"
 
+# Centralized set of helper names for filtering from result_env
+RRL_HELPER_NAMES = {'__builtins__', 'math', 'rrl_print', 'RobotSim'}
+
+# ========== Transpiled code executor ==========
 def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Comment added for clarity by @PankajPathak
+    
+    Constraints of the exec environment:
+        - Only safe built-ins are available
+    
+    Executes transpiled RRL source code in a restricted environment.
+
+    Args:
+        source: The transpiled Python source code as a string.
+        capture_output: Optional list to capture printed output.
+
+    Returns:
+        dict: {
+            "output": The list of captured output lines (or None if not captured),
+            "env": The dictionary of global variables after execution (excluding helpers).
+        }
+    """
     import builtins as _builtins
 
     safe_builtins = dict(SAFE_BUILTINS)
@@ -645,7 +668,9 @@ def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> 
     exec_globals['RobotSim'] = RobotSim
 
     ns: Dict[str, Any] = dict(exec_globals)
-    ns['robot'] = RobotSim()
+    # Only set 'robot' if not defined by the transpiled code
+    if 'robot' not in ns:
+        ns['robot'] = RobotSim()
 
     try:
         compiled = compile(source, '<rrl-transpiled>', 'exec')
@@ -655,32 +680,7 @@ def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> 
         raise
 
     # prepare env snapshot excluding internal helpers
-    result_env = {k: v for k, v in ns.items() if k not in ('__builtins__', 'math', 'rrl_print', 'RobotSim')}
-    return {"output": capture_output if capture_output is not None else None, "env": result_env}
-
-    exec_globals = {"__builtins__": SAFE_BUILTINS, "math": math}
-    def rrl_print(*args):
-        text = " ".join(str(x) for x in args)
-        if capture_output is not None:
-            capture_output.append(text)
-        else:
-            print(text)
-    exec_globals['rrl_print'] = rrl_print
-    exec_globals['RobotSim'] = RobotSim
-
-    # single shared namespace for exec (globals + locals together)
-    ns: Dict[str, Any] = dict(exec_globals)
-    ns['robot'] = RobotSim()
-
-    try:
-        compiled = compile(source, '<rrl-transpiled>', 'exec')
-        exec(compiled, ns)
-    except Exception:
-        traceback.print_exc()
-        raise
-
-    # prepare env snapshot excluding internal helpers
-    result_env = {k: v for k, v in ns.items() if k not in ('__builtins__', 'math', 'rrl_print', 'RobotSim')}
+    result_env = {k: v for k, v in ns.items() if k not in RRL_HELPER_NAMES}
     return {"output": capture_output if capture_output is not None else None, "env": result_env}
 
 # ========== Runner helpers ==========

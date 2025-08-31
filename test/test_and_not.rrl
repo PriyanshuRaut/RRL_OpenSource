@@ -1,8 +1,9 @@
 x = 1
 y = 0
 display("x and y:", x and y)
-display("not x:", not x)
+display("x and y:", x or y)
+display("not x:", not not x)
 display("not y:", not y)
-and x y
-not x
-not y
+if not not x
+    display("x = 1")
+endif
