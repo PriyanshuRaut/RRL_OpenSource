@@ -1,13 +1,18 @@
 class Rect
-    def __init__(w, h)
+    def __init__(w, l)
         self.w = w
-        self.h = h
+        self.l = l
     enddef
     
     def area()
-        return self.w * self.h
+        return self.w * self.l
+    enddef
+
+    def perimeter()
+        return 2 * (self.w + self.l)
     enddef
 endclass
 
 r = Rect(3,4)
 display(r.area())
+display(r.perimeter())

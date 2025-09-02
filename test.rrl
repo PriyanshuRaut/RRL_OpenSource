@@ -1,0 +1,10 @@
+x = 3
+
+match x + 1
+    case 1
+        display("one")
+    case 2
+        display("two")
+    default
+        display("other")
+endmatch

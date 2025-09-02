@@ -68,6 +68,17 @@ class IfBlock(Node):
     else_block: Optional[List[Node]]
 
 @dataclass
+class Case:
+    pattern: str
+    body: List[Node]
+
+@dataclass
+class switchBlock(Node):
+    expr: Node
+    cases: List[Case]
+    default_block: Optional[List[Node]]
+
+@dataclass
 class RepeatBlock(Node):
     count_expr: str
     body: List[Node]
@@ -140,6 +151,10 @@ class Parser:
 
             if lower.startswith("if "):
                 nodes.append(self.parse_if())
+                continue
+
+            if lower.startswith("match "):
+                nodes.append(self.parse_match())
                 continue
 
             if lower.startswith("not "):
@@ -225,6 +240,48 @@ class Parser:
             else:
                 raise ParserError(f"[line {line_no}] Expected elif/else/endif, got: {line}")
         raise ParserError(f"[line {start_line}] if-block not closed")
+
+    def parse_match(self) -> switchBlock:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header[len("match "):].strip()
+        self.advance()
+
+        cases: List[Case] = []
+        default_block: Optional[List[Node]] = None
+
+        while self.i < len(self.lines):
+            line_no, raw = self.current()
+            line = strip_comment(raw).strip()
+            lower = line.lower()
+
+            if lower.startswith("case "):
+                pattern_str = line[len("case "):].strip()
+                self.advance()
+                body = self.parse_block(stop_tokens=["case", "default", "endmatch"])
+                cases.append(Case(pattern=Expr(line=line_no, expr=pattern_str), body=body))
+
+            elif lower == "default":
+                self.advance()
+                default_block = self.parse_block(stop_tokens=["endmatch"])
+
+            elif lower == "endmatch":
+                self.advance()
+                return switchBlock(
+                    line=start_line,
+                    expr=Expr(line=start_line, expr=expr),
+                    cases=cases,
+                    default_block=default_block,
+                )
+
+            else:
+                raise ParserError(
+                    f"[line {line_no}] Unexpected token in match block: '{line}' "
+                    f"(expected case/default/endmatch)"
+                )
+
+        raise ParserError(f"[line {start_line}] match-block not closed")
+
 
     def parse_or(self) -> Expr:
         start_line, raw = self.current()
@@ -418,6 +475,18 @@ class Interpreter:
             else:
                 self.env[node.name] = value
 
+        elif isinstance(node, switchBlock):
+            switch_value = safe_eval(node.expr.expr, self.env)
+            executed = False
+            for case in node.cases:
+                case_value = safe_eval(case.pattern.expr, self.env)
+                if switch_value == case_value:
+                    self.exec_block(case.body)
+                    executed = True
+                    break
+            if not executed and node.default_block is not None:
+                self.exec_block(node.default_block)
+
         elif isinstance(node, Display):
             text = node.args_expr.strip()
             if text == "":
@@ -562,6 +631,20 @@ def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[s
 
     elif isinstance(node, Expr):
         lines.append(f"{ind}{node.expr}")
+
+    elif isinstance(node, switchBlock):
+        expr_code = node.expr.expr  # Expr node → string expression
+        lines.append(f"{ind}match {expr_code}:")
+        for case in node.cases:
+            pattern_code = case.pattern.expr
+            lines.append(f"{ind}    case {pattern_code}:")
+            for stmt in case.body:
+                lines.extend(transpile_node(stmt, level+2, in_class=in_class))
+        if node.default_block is not None:
+            lines.append(f"{ind}    case _:")  # Python's match-case default
+            for stmt in node.default_block:
+                lines.extend(transpile_node(stmt, level+2, in_class=in_class))
+
 
     elif isinstance(node, IfBlock):
         first = True
