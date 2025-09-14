@@ -1,4 +1,3 @@
-# hardware.py
 import serial  # for Arduino serial communication
 import time
 

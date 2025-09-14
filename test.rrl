@@ -1,10 +1,16 @@
-x = 3
+display("start")
+import math
+display(math.sqrt(25))
+from math import pi
+display(pi)
+import os as myos
+display(myos.name)
+a = list_of(1,2,3)
+display(a)
+a.append(4)
+display(a)
 
-match x + 1
-    case 1
-        display("one")
-    case 2
-        display("two")
-    default
-        display("other")
-endmatch
+def add(a,b)
+ return a+b
+enddef
+display(add(2,3))

@@ -1,12 +1,3 @@
-#!/usr/bin/env python3
-# rrl_v0.3_transpile.py — Raut Robotics Language (fixed)
-# Fixes applied:
-#  - robust header parsing (handles leading spaces) for def/class/if/repeat/while
-#  - parse_block now stops when encountering lines that start with stop tokens
-#  - transpiler: methods inside classes get an implicit `self` parameter when transpiled
-#  - transpiler: fixed rrl_print empty-arg generation
-#  - other small robustness fixes
-
 from __future__ import annotations
 import sys
 import math
@@ -14,23 +5,22 @@ import traceback
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
+# RRL : Basic Language Logic
+
 # ========== Safe eval env ==========
 SAFE_BUILTINS = {
     "abs": abs, "min": min, "max": max, "round": round, "len": len,
     "int": int, "float": float, "str": str, "bool": bool, "range": range,
-    # handy constructors and small helpers
     "list": list, "tuple": tuple, "dict": dict, "set": set,
     "enumerate": enumerate, "zip": zip, "sum": sum, "any": any, "all": all,
     "sorted": sorted, "reversed": reversed,
-    # attribute helpers (use with care)
     "setattr": setattr, "getattr": getattr, "hasattr": hasattr,
+    "object": object, "__name__": "__main__",
 }
 SAFE_GLOBALS = {"__builtins__": SAFE_BUILTINS, "math": math}
 
-
 def safe_eval(expr: str, env: Dict[str, Any]) -> Any:
     return eval(expr, SAFE_GLOBALS, env)
-
 
 def strip_comment(line: str) -> str:
     s = line
@@ -59,7 +49,6 @@ class Node:
 class Expr(Node):
     expr: str
 
-
 @dataclass
 class Program(Node):
     body: List[Node]
@@ -79,6 +68,17 @@ class IfBlock(Node):
     else_block: Optional[List[Node]]
 
 @dataclass
+class Case:
+    pattern: str
+    body: List[Node]
+
+@dataclass
+class switchBlock(Node):
+    expr: Node
+    cases: List[Case]
+    default_block: Optional[List[Node]]
+
+@dataclass
 class RepeatBlock(Node):
     count_expr: str
     body: List[Node]
@@ -96,13 +96,23 @@ class FunctionDef(Node):
 
 @dataclass
 class ReturnNode(Node):
-    expr: Optional[str]  # None means return without value
+    expr: Optional[str]
 
 @dataclass
 class ClassDef(Node):
     name: str
     bases: List[str]
     body: List[Node]
+
+# New AST nodes for imports
+@dataclass
+class ImportNode(Node):
+    modules: List[Tuple[str, Optional[str]]]
+
+@dataclass
+class FromImportNode(Node):
+    module: str
+    names: List[Tuple[str, Optional[str]]]
 
 # ========== Parser ==========
 class ParserError(Exception):
@@ -135,25 +145,79 @@ class Parser:
                 continue
 
             lower = line.lower()
-            # Stop if the line equals a stop token or starts with a stop token + space
             if any(lower == t or lower.startswith(t + " ") for t in stop_tokens):
                 return nodes
 
-            # display(...)
+            # IMPORT support
+            if lower.startswith("import "):
+                rest = line[len("import "):].strip()
+                modules = []
+                for part in [p.strip() for p in rest.split(",") if p.strip()]:
+                    if " as " in part.lower():
+                        idx = part.lower().rfind(" as ")
+                        mod = part[:idx].strip()
+                        alias = part[idx+4:].strip()
+                        modules.append((mod, alias))
+                    else:
+                        modules.append((part, None))
+                nodes.append(ImportNode(line=line_no, modules=modules))
+                self.advance()
+                continue
+
+            if lower.startswith("from "):
+                idx = lower.find(" import ")
+                if idx == -1:
+                    raise ParserError(f"[line {line_no}] invalid from-import syntax")
+                module_part = line[5:idx].strip()
+                names_part = line[idx+8:].strip()
+                if not names_part:
+                    raise ParserError(f"[line {line_no}] from-import needs names")
+                names = []
+                for part in [p.strip() for p in names_part.split(",") if p.strip()]:
+                    if " as " in part.lower():
+                        idx2 = part.lower().rfind(" as ")
+                        name = part[:idx2].strip()
+                        alias = part[idx2+4:].strip()
+                        names.append((name, alias))
+                    else:
+                        names.append((part, None))
+                nodes.append(FromImportNode(line=line_no, module=module_part, names=names))
+                self.advance()
+                continue
+
             if lower.startswith("display(") and line.endswith(")"):
                 inside = line[len("display("):-1].strip()
                 nodes.append(Display(line=line_no, args_expr=inside))
                 self.advance()
                 continue
 
-            # class
             if lower.startswith("class "):
                 nodes.append(self.parse_class())
                 continue
 
-            # if / elif / else / endif
             if lower.startswith("if "):
                 nodes.append(self.parse_if())
+                continue
+
+            if lower.startswith("match "):
+                nodes.append(self.parse_match())
+                continue
+
+            if lower.startswith("not "):
+                nodes.append(Expr(line=line_no,expr=line))
+                self.advance()
+                continue
+
+            if lower.startswith("or "):
+                nodes.append(self.parse_or())
+                continue
+
+            if lower.startswith("and "):
+                nodes.append(self.parse_and())
+                continue
+
+            if lower.startswith("not "):
+                nodes.append(self.parse_not())
                 continue
 
             if lower.startswith("repeat "):
@@ -164,12 +228,10 @@ class Parser:
                 nodes.append(self.parse_while())
                 continue
 
-            # function def
             if lower.startswith("def "):
                 nodes.append(self.parse_def())
                 continue
 
-            # return
             if lower.startswith("return"):
                 expr = line[len("return"):].strip()
                 expr = expr if expr != "" else None
@@ -177,7 +239,6 @@ class Parser:
                 self.advance()
                 continue
 
-            # assignment (allow dotted names like self.x)
             if "=" in line and not lower.startswith(("elif ", "else", "endif", "endrepeat", "endwhile", "enddef", "endclass")):
                 left, right = line.split("=", 1)
                 name = left.strip()
@@ -189,7 +250,6 @@ class Parser:
                 self.advance()
                 continue
 
-            # fallback: expression
             nodes.append(Expr(line=line_no, expr=line))
             self.advance()
             continue
@@ -227,6 +287,69 @@ class Parser:
                 raise ParserError(f"[line {line_no}] Expected elif/else/endif, got: {line}")
         raise ParserError(f"[line {start_line}] if-block not closed")
 
+    def parse_match(self) -> switchBlock:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header[len("match "):].strip()
+        self.advance()
+
+        cases: List[Case] = []
+        default_block: Optional[List[Node]] = None
+
+        while self.i < len(self.lines):
+            line_no, raw = self.current()
+            line = strip_comment(raw).strip()
+            lower = line.lower()
+
+            if lower.startswith("case "):
+                pattern_str = line[len("case "):].strip()
+                self.advance()
+                body = self.parse_block(stop_tokens=["case", "default", "endmatch"])
+                cases.append(Case(pattern=Expr(line=line_no, expr=pattern_str), body=body))
+
+            elif lower == "default":
+                self.advance()
+                default_block = self.parse_block(stop_tokens=["endmatch"])
+
+            elif lower == "endmatch":
+                self.advance()
+                return switchBlock(
+                    line=start_line,
+                    expr=Expr(line=start_line, expr=expr),
+                    cases=cases,
+                    default_block=default_block,
+                )
+
+            else:
+                raise ParserError(
+                    f"[line {line_no}] Unexpected token in match block: '{line}' "
+                    f"(expected case/default/endmatch)"
+                )
+
+        raise ParserError(f"[line {start_line}] match-block not closed")
+
+
+    def parse_or(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)
+
+    def parse_and(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)    
+
+    def parse_not(self) -> Expr:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        expr = header
+        self.advance()
+        return Expr(line=start_line, expr=expr)
+
     def parse_repeat(self) -> RepeatBlock:
         start_line, raw = self.current()
         header = strip_comment(raw).strip()
@@ -252,12 +375,12 @@ class Parser:
     def parse_class(self) -> ClassDef:
         start_line, raw = self.current()
         header = strip_comment(raw).strip()
-        # support: ClassName or ClassName(Base1, Base2)
-        name = header
+        rest = header[len("class "):].strip()
+        name = rest
         bases: List[str] = []
-        if "(" in header and header.endswith(")"):
-            name = header.split("(", 1)[0].strip()
-            bases_str = header[header.find("(")+1:-1].strip()
+        if "(" in rest and rest.endswith(")"):
+            name = rest.split("(", 1)[0].strip()
+            bases_str = rest[rest.find("(")+1:-1].strip()
             bases = [b.strip() for b in bases_str.split(",") if b.strip()]
         if not name.isidentifier():
             raise ParserError(f"[line {start_line}] invalid class name: {name}")
@@ -267,7 +390,7 @@ class Parser:
             self.advance()
             return ClassDef(line=start_line, name=name, bases=bases, body=body)
         raise ParserError(f"[line {start_line}] class-block not closed with endclass")
-
+        
     def parse_def(self) -> FunctionDef:
         start_line, raw = self.current()
         header = strip_comment(raw).strip()
@@ -292,7 +415,7 @@ class Parser:
             return FunctionDef(line=start_line, name=name, params=params, body=body)
         raise ParserError(f"[line {start_line}] def-block not closed with enddef")
 
-# ========== Runtime (original interpreter preserved) ==========
+# ========== Runtime (interpreter) ==========
 class RRLRuntimeError(Exception):
     pass
 
@@ -300,12 +423,12 @@ class ReturnSignal(Exception):
     def __init__(self, value):
         self.value = value
 
-# Simple robot simulator
+# RRL : Robotics domain
 class RobotSim:
     def __init__(self):
         self.x = 0.0
         self.y = 0.0
-        self.heading = 0.0  # degrees, 0 = +x
+        self.heading = 0.0
         self.battery = 100.0
         self.status = "idle"
 
@@ -314,13 +437,11 @@ class RobotSim:
         return (self.x, self.y)
 
     def move(self, meters: float):
-        import math
         rad = math.radians(self.heading)
         dx = meters * math.cos(rad)
         dy = meters * math.sin(rad)
         self.x += dx
         self.y += dy
-        # battery drain heuristic
         self.battery = max(0.0, self.battery - abs(meters) * 0.5)
         self.status = "moving"
 
@@ -335,13 +456,41 @@ class RobotSim:
     def __repr__(self):
         return f"RobotSim(pos=({self.x:.2f},{self.y:.2f}), h={self.heading:.1f}, bat={self.battery:.1f}, status={self.status})"
 
+# helper constructors for easy collection creation
+def _list_of(*items):
+    return list(items)
+
+def _tuple_of(*items):
+    return tuple(items)
+
+def _set_of(*items):
+    return set(items)
+
+def _dict_of(*args, **kwargs):
+    # allow either dict_of(k1, v1, k2, v2, ...)
+    # or dict_of({'a':1, ...}) or dict_of(k1=v1, ...)
+    if len(args) == 1 and isinstance(args[0], dict):
+        return dict(args[0])
+    if args and len(args) % 2 == 0:
+        it = iter(args)
+        return {k: v for k, v in zip(it, it)}
+    if kwargs:
+        d = dict(kwargs)
+        if args:
+            raise TypeError("dict_of: invalid arguments")
+        return d
+    return {}
+
 class Interpreter:
     def __init__(self, output: Optional[List[str]] = None):
-        # global environment (shared)
         self.env: Dict[str, Any] = {}
-        self.output = output  # if provided, collect display outputs
-        # bind robot sim
+        self.output = output
         self.env['robot'] = RobotSim()
+        # helpful collection constructors available in RRL
+        self.env['list_of'] = _list_of
+        self.env['tuple_of'] = _tuple_of
+        self.env['set_of'] = _set_of
+        self.env['dict_of'] = _dict_of
 
     def run_program(self, prog: Program):
         try:
@@ -349,7 +498,6 @@ class Interpreter:
         except RRLRuntimeError as e:
             self._emit(f"RuntimeError: {e}")
         except ReturnSignal as rs:
-            # stray return outside function
             self._emit(f"Return outside function: {rs.value}")
         except Exception:
             traceback.print_exc()
@@ -385,6 +533,37 @@ class Interpreter:
                     raise RRLRuntimeError(f"[line {node.line}] attribute assignment failed: {e}")
             else:
                 self.env[node.name] = value
+
+        elif isinstance(node, ImportNode):
+            for mod, alias in node.modules:
+                try:
+                    imported = __import__(mod, fromlist=['*'])
+                except Exception as e:
+                    raise RRLRuntimeError(f"[line {node.line}] import failed: {e}")
+                name = alias if alias else mod.split('.')[0]
+                self.env[name] = imported
+
+        elif isinstance(node, FromImportNode):
+            for name, alias in node.names:
+                try:
+                    mod_obj = __import__(node.module, fromlist=[name])
+                    val = getattr(mod_obj, name)
+                except Exception as e:
+                    raise RRLRuntimeError(f"[line {node.line}] from-import failed: {e}")
+                dest = alias if alias else name
+                self.env[dest] = val
+
+        elif isinstance(node, switchBlock):
+            switch_value = safe_eval(node.expr.expr, self.env)
+            executed = False
+            for case in node.cases:
+                case_value = safe_eval(case.pattern.expr, self.env)
+                if switch_value == case_value:
+                    self.exec_block(case.body)
+                    executed = True
+                    break
+            if not executed and node.default_block is not None:
+                self.exec_block(node.default_block)
 
         elif isinstance(node, Display):
             text = node.args_expr.strip()
@@ -486,11 +665,9 @@ class Interpreter:
                                 self.env = old_env
                         return method
                     methods[m.name] = make_method(m.name, m.params, m.body)
-                else:
-                    if isinstance(m, Assign):
-                        val = safe_eval(m.expr, self.env)
-                        methods[m.name] = val
-            # resolve base classes if present
+                elif isinstance(m, Assign):
+                    val = safe_eval(m.expr, self.env)
+                    methods[m.name] = val
             bases_objs = []
             for bname in node.bases:
                 if bname in self.env and isinstance(self.env[bname], type):
@@ -512,27 +689,57 @@ class Interpreter:
             raise RRLRuntimeError(f"Unknown node type at line {node.line}: {type(node).__name__}")
 
 # ========== Transpiler ==========
-# Convert RRL AST into Python source. This is intentionally straightforward: we
-# map RRL constructs to Python equivalents and then exec the generated code in
-# a restricted globals dict for performance and to inherit Python's semantics.
-
 def _indent(level: int) -> str:
     return "    " * level
-
 
 def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[str]:
     ind = _indent(level)
     lines: List[str] = []
+
     if isinstance(node, Assign):
         lines.append(f"{ind}{node.name} = {node.expr}")
+
     elif isinstance(node, Display):
         args = node.args_expr.strip()
         if args == "":
             lines.append(f'{ind}rrl_print("")')
         else:
             lines.append(f"{ind}rrl_print({args})")
+
     elif isinstance(node, Expr):
         lines.append(f"{ind}{node.expr}")
+
+    elif isinstance(node, ImportNode):
+        parts = []
+        for mod, alias in node.modules:
+            if alias:
+                parts.append(f"{mod} as {alias}")
+            else:
+                parts.append(mod)
+        lines.append(f"{ind}import {', '.join(parts)}")
+
+    elif isinstance(node, FromImportNode):
+        parts = []
+        for name, alias in node.names:
+            if alias:
+                parts.append(f"{name} as {alias}")
+            else:
+                parts.append(name)
+        lines.append(f"{ind}from {node.module} import {', '.join(parts)}")
+
+    elif isinstance(node, switchBlock):
+        expr_code = node.expr.expr
+        lines.append(f"{ind}match {expr_code}:")
+        for case in node.cases:
+            pattern_code = case.pattern.expr
+            lines.append(f"{ind}    case {pattern_code}:")
+            for stmt in case.body:
+                lines.extend(transpile_node(stmt, level+2, in_class=in_class))
+        if node.default_block is not None:
+            lines.append(f"{ind}    case _:")
+            for stmt in node.default_block:
+                lines.extend(transpile_node(stmt, level+2, in_class=in_class))
+
     elif isinstance(node, IfBlock):
         first = True
         for cond, body in node.branches:
@@ -547,17 +754,19 @@ def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[s
             lines.append(f"{ind}else:")
             for n in node.else_block:
                 lines.extend(transpile_node(n, level+1, in_class=in_class))
+
     elif isinstance(node, RepeatBlock):
-        lines.append(f"{ind}for _rrl_i in range(int({node.count_expr})):")
+        lines.append(f"{ind}for _rrl_i in range(int({node.count_expr})): ")
         for n in node.body:
             lines.extend(transpile_node(n, level+1, in_class=in_class))
+
     elif isinstance(node, WhileBlock):
         lines.append(f"{ind}while {node.cond_expr}:")
         for n in node.body:
             lines.extend(transpile_node(n, level+1, in_class=in_class))
+
     elif isinstance(node, FunctionDef):
         params = ", ".join(node.params)
-        # when transpiling a method inside a class, implicitly add 'self' if not present
         if in_class:
             if not params or params.split(",")[0].strip() != 'self':
                 params = ("self, " + params) if params else "self"
@@ -567,6 +776,7 @@ def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[s
         else:
             for n in node.body:
                 lines.extend(transpile_node(n, level+1, in_class=in_class))
+
     elif isinstance(node, ClassDef):
         bases = ", ".join(node.bases) if node.bases else "object"
         lines.append(f"{ind}class {node.name}({bases}):")
@@ -574,31 +784,41 @@ def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[s
             lines.append(f"{ind}    pass")
         else:
             for n in node.body:
-                # mark that we're transpiling inside a class so methods get `self`
                 lines.extend(transpile_node(n, level+1, in_class=True))
+
     elif isinstance(node, ReturnNode):
         if node.expr is None:
             lines.append(f"{ind}return")
         else:
             lines.append(f"{ind}return {node.expr}")
+
     else:
         raise RuntimeError(f"transpile: unknown node type {type(node)}")
-    return lines
 
+    return lines
 
 def transpile_program(prog: Program) -> str:
     out: List[str] = []
     out.append("# Transpiled RRL -> Python code")
     for node in prog.body:
         out.extend(transpile_node(node, level=0))
-    return "\n".join(out)
+    # join lines with newlines so the generated Python is valid
+    return "\n".join(out) + "\n"
 
+# Centralized set of helper names for filtering from result_env
+RRL_HELPER_NAMES = {'__builtins__', 'math', 'rrl_print', 'RobotSim'}
 
+# ========== Transpiled code executor ==========
 def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> Dict[str, Any]:
-    # prepare restricted globals and locals
-    exec_globals = {"__builtins__": SAFE_BUILTINS, "math": math}
+    import builtins as _builtins
 
-    # rrl_print collects outputs when capture_output is provided
+    safe_builtins = dict(SAFE_BUILTINS)
+    safe_builtins["__build_class__"] = _builtins.__build_class__
+    # allow imports in transpiled code
+    safe_builtins["__import__"] = _builtins.__import__
+
+    exec_globals = {"__builtins__": safe_builtins, "math": math}
+
     def rrl_print(*args):
         text = " ".join(str(x) for x in args)
         if capture_output is not None:
@@ -607,27 +827,28 @@ def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> 
             print(text)
 
     exec_globals['rrl_print'] = rrl_print
-    # provide RobotSim class
     exec_globals['RobotSim'] = RobotSim
+    # expose collection helpers to transpiled code
+    exec_globals['list_of'] = _list_of
+    exec_globals['tuple_of'] = _tuple_of
+    exec_globals['set_of'] = _set_of
+    exec_globals['dict_of'] = _dict_of
 
-    # Build a single namespace for exec to avoid globals/locals lookup confusion.
     ns: Dict[str, Any] = dict(exec_globals)
-    ns['robot'] = RobotSim()
+    if 'robot' not in ns:
+        ns['robot'] = RobotSim()
 
-    # execute in a single shared namespace
     try:
         compiled = compile(source, '<rrl-transpiled>', 'exec')
-        exec(compiled, ns, ns)
+        exec(compiled, ns)
     except Exception:
         traceback.print_exc()
         raise
 
-    # prepare env snapshot (exclude internal helpers)
-    result_env = {k: v for k, v in ns.items() if k not in ('__builtins__', 'math', 'rrl_print', 'RobotSim')}
+    result_env = {k: v for k, v in ns.items() if k not in RRL_HELPER_NAMES}
     return {"output": capture_output if capture_output is not None else None, "env": result_env}
 
 # ========== Runner helpers ==========
-
 def run_rrl_code(code: str, capture_output: Optional[List[str]] = None, transpile: bool = True) -> Dict[str, Any]:
     lines = code.splitlines()
     parser = Parser(lines)
@@ -645,37 +866,54 @@ def run_rrl_code(code: str, capture_output: Optional[List[str]] = None, transpil
         interp.run_program(prog)
         return {"output": capture_output if capture_output is not None else None, "env": interp.env}
 
-
 def run_rrl_file(filename: str, capture_output: Optional[List[str]] = None, transpile: bool = True) -> Dict[str, Any]:
     with open(filename, "r", encoding="utf-8") as f:
         code = f.read()
     return run_rrl_code(code, capture_output=capture_output, transpile=transpile)
 
-# ========== REPL (uses transpiler by default) ==========
-BANNER = """RRL v0.3 — Raut Robotics Language (transpile mode)
-Blocks:
-  if ... / elif ... / else / endif
-  repeat N / endrepeat
-  while cond / endwhile
-  def name(params) / enddef
-  class Name or class Name(Base) / endclass
-Use display(...) for output. # comments allowed
-Type :help for help, :env to see variables, :quit to exit.
+# ========== REPL ==========
+BANNER = """RRL v1.0 — (transpile mode)
+Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, def/enddef, class/endclass, match/case/default/endmatch blocks.
+Assignments: x = 10, obj.attr = value
+Expressions: arithmetic, function calls, method calls, object attributes
+Control flow: if, match (like switch), loops (repeat, while)
+Functions: def name(params) ... enddef
+Classes: class Name(bases) ... endclass
+RobotSim API: robot.move(meters), robot.rotate(degrees), robot.stop(), robot.position, robot.battery, robot.status
+Import support: import math, import os as myos, from math import sqrt, pi
+Collection helpers: list_of(...), tuple_of(...), set_of(...), dict_of(...)
+Use display(...) for output. Type :help for help, :env to see variables, :quit to exit.
 """
 
 HELP = """RRL quick help:
-- Variables:
-    x = 10
-- Output:
-    display("Value:", x)
-- Functions:
-    def add(a, b)
-      return a + b
-    enddef
-    display(add(2,3))
-- Control: if/elif/else/endif, repeat N/endrepeat, while/endwhile
-Commands:
-  :help  :env  :quit  :transpile on|off
+  x = 10
+  display("Value:", x)
+
+Collections (easy helpers):
+  a = list_of(1, 2, 3)
+  b = tuple_of(1, 2, 3)
+  s = set_of(1, 2, 3)
+  d = dict_of('a', 1, 'b', 2)
+  # or dict_of({'a':1, 'b':2}) or dict_of(a=1, b=2)
+
+  display(a)
+  a.append(4)
+  display(a)
+
+  from math import pi
+  display(pi)
+
+  def add_all(arr)
+    total = 0
+    repeat len(arr)
+      # example using Python-style indexing
+      # note: safe_eval allows Python list indexing
+      total = total + arr[_rrl_i]
+    endrepeat
+    return total
+  enddef
+
+Commands: :help  :env  :quit  :transpile on|off
 """
 
 def repl():
@@ -710,7 +948,7 @@ def repl():
             print()
             break
 
-        if open_blocks == 0 and line.startswith(":"):
+        if open_blocks == 0 and line.startswith(":" ):
             cmd = line.strip().lower()
             if cmd == ":quit":
                 break
@@ -742,7 +980,7 @@ def repl():
             continue
 
         if open_blocks == 0:
-            code = "".join(buffer)
+            code = "\n".join(buffer)        # preserve line breaks
             try:
                 res = run_rrl_code(code, capture_output=None, transpile=transpile_mode)
                 if res.get('output'):
@@ -769,9 +1007,8 @@ def main():
         for o in outs:
             print(o)
     else:
-        print("Usage:")
-        print("  python rrl_v0.3_transpile.py            # start REPL")
-        print("  python rrl_v0.3_transpile.py program.rrl [--no-transpile]  # run RRL file")
+        print("Usage: python rrl_v0.4_with_imports.py            # start REPL")
+        print("       python rrl_v0.4_with_imports.py file.rrl  # run RRL file")
 
 if __name__ == "__main__":
     main()
