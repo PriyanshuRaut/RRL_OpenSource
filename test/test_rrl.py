@@ -1,26 +1,68 @@
 from __future__ import annotations
 import sys
 import math
+import ast
 import traceback
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
 # RRL : Basic Language Logic
 
-# ========== Safe eval env ==========
+# ========== Import allow-list & safe builtins (security) ==========
+ALLOWED_MODULES = {
+    'math', 'random', 'time', 'datetime', 'itertools', 'functools',
+    'operator', 'statistics', 'json', 'os', 'sys', 're', 'string',
+
+}
+
 SAFE_BUILTINS = {
     "abs": abs, "min": min, "max": max, "round": round, "len": len,
     "int": int, "float": float, "str": str, "bool": bool, "range": range,
     "list": list, "tuple": tuple, "dict": dict, "set": set,
     "enumerate": enumerate, "zip": zip, "sum": sum, "any": any, "all": all,
     "sorted": sorted, "reversed": reversed,
-    "setattr": setattr, "getattr": getattr, "hasattr": hasattr,
     "object": object, "__name__": "__main__",
 }
 SAFE_GLOBALS = {"__builtins__": SAFE_BUILTINS, "math": math}
 
-def safe_eval(expr: str, env: Dict[str, Any]) -> Any:
-    return eval(expr, SAFE_GLOBALS, env)
+# small helper: safe import used by interpreter
+def _is_module_allowed(modname: str) -> bool:
+    top = modname.split('.')[0]
+    return top in ALLOWED_MODULES
+
+def _safe_import_interpreter(name: str, fromlist: Optional[List[str]] = None):
+    if not _is_module_allowed(name):
+        raise ImportError(f"Import of module '{name}' not allowed by ALLOWED_MODULES")
+    return __import__(name, fromlist=fromlist or ['*'])
+
+# safe import wrapper to be inserted into transpiled exec globals
+def _make_safe_import_for_exec():
+    real_import = __import__
+    def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        top = name.split('.')[0]
+        if top not in ALLOWED_MODULES:
+            raise ImportError(f"Import of module '{name}' not allowed by ALLOWED_MODULES")
+        return real_import(name, globals, locals, fromlist, level)
+    return _safe_import
+
+# ========== Expression evaluation ==========
+# Prefer ast.literal_eval for pure literals (safe), fall back to controlled eval.
+
+def eval_expr(expr: str, env: Dict[str, Any], line: Optional[int] = None) -> Any:
+    s = expr.strip()
+    # try literal first
+    try:
+        return ast.literal_eval(s)
+    except Exception:
+        pass
+    # fallback to safe eval (uses SAFE_GLOBALS)
+    try:
+        return eval(s, SAFE_GLOBALS, env)
+    except Exception as e:
+        if line:
+            raise RRLRuntimeError(f"[line {line}] error evaluating expression: {e}")
+        raise
+
 
 def strip_comment(line: str) -> str:
     s = line
@@ -423,7 +465,7 @@ class ReturnSignal(Exception):
     def __init__(self, value):
         self.value = value
 
-# RRL : Robotics domain
+#RRL : Rototics domain
 class RobotSim:
     def __init__(self):
         self.x = 0.0
@@ -476,6 +518,7 @@ def _dict_of(*args, **kwargs):
         return {k: v for k, v in zip(it, it)}
     if kwargs:
         d = dict(kwargs)
+        # if args present and odd, raise
         if args:
             raise TypeError("dict_of: invalid arguments")
         return d
@@ -525,7 +568,7 @@ class Interpreter:
 
     def exec(self, node: Node):
         if isinstance(node, Assign):
-            value = safe_eval(node.expr, self.env)
+            value = eval_expr(node.expr, self.env, line=node.line)
             if "." in node.name:
                 try:
                     self._set_dotted(node.name, value)
@@ -537,7 +580,7 @@ class Interpreter:
         elif isinstance(node, ImportNode):
             for mod, alias in node.modules:
                 try:
-                    imported = __import__(mod, fromlist=['*'])
+                    imported = _safe_import_interpreter(mod, fromlist=['*'])
                 except Exception as e:
                     raise RRLRuntimeError(f"[line {node.line}] import failed: {e}")
                 name = alias if alias else mod.split('.')[0]
@@ -546,7 +589,7 @@ class Interpreter:
         elif isinstance(node, FromImportNode):
             for name, alias in node.names:
                 try:
-                    mod_obj = __import__(node.module, fromlist=[name])
+                    mod_obj = _safe_import_interpreter(node.module, fromlist=[name])
                     val = getattr(mod_obj, name)
                 except Exception as e:
                     raise RRLRuntimeError(f"[line {node.line}] from-import failed: {e}")
@@ -554,10 +597,10 @@ class Interpreter:
                 self.env[dest] = val
 
         elif isinstance(node, switchBlock):
-            switch_value = safe_eval(node.expr.expr, self.env)
+            switch_value = eval_expr(node.expr.expr, self.env, line=node.line)
             executed = False
             for case in node.cases:
-                case_value = safe_eval(case.pattern.expr, self.env)
+                case_value = eval_expr(case.pattern.expr, self.env, line=case.pattern.line)
                 if switch_value == case_value:
                     self.exec_block(case.body)
                     executed = True
@@ -572,23 +615,26 @@ class Interpreter:
                 return
             try:
                 tuple_expr = f"({text},)" if "," not in text else f"({text})"
-                args = safe_eval(tuple_expr, self.env)
+                args = eval_expr(tuple_expr, self.env, line=node.line)
                 if not isinstance(args, tuple):
                     args = (args,)
                 self._emit(*args)
+            except RRLRuntimeError:
+                raise
             except Exception:
+                # fallback to raw text if eval fails
                 self._emit(text)
 
         elif isinstance(node, Expr):
             try:
-                safe_eval(node.expr, self.env)
+                eval_expr(node.expr, self.env, line=node.line)
             except Exception as e:
                 raise RRLRuntimeError(f"[line {node.line}] error evaluating expression: {e}")
 
         elif isinstance(node, IfBlock):
             executed = False
             for cond_expr, body in node.branches:
-                if safe_eval(cond_expr, self.env):
+                if eval_expr(cond_expr, self.env, line=node.line):
                     self.exec_block(body)
                     executed = True
                     break
@@ -596,7 +642,7 @@ class Interpreter:
                 self.exec_block(node.else_block)
 
         elif isinstance(node, RepeatBlock):
-            n = safe_eval(node.count_expr, self.env)
+            n = eval_expr(node.count_expr, self.env, line=node.line)
             try:
                 count = int(n)
             except Exception:
@@ -610,7 +656,7 @@ class Interpreter:
             iterations = 0
             MAX_ITER = 1_000_000
             while True:
-                cond = safe_eval(node.cond_expr, self.env)
+                cond = eval_expr(node.cond_expr, self.env, line=node.line)
                 if not cond:
                     break
                 self.exec_block(node.body)
@@ -619,10 +665,11 @@ class Interpreter:
                     raise RRLRuntimeError(f"[line {node.line}] while-loop exceeded {MAX_ITER} iterations")
 
         elif isinstance(node, FunctionDef):
-            def make_func(name, params, body):
+            def make_func(name, params, body, def_line):
                 def fn(*args):
                     if len(args) != len(params):
                         raise TypeError(f"{name}() expected {len(params)} args, got {len(args)}")
+                    # lexical scope: new local environment chained to current env
                     old_env = self.env
                     local_env = dict(old_env)
                     for p, a in zip(params, args):
@@ -637,7 +684,7 @@ class Interpreter:
                     finally:
                         self.env = old_env
                 return fn
-            self.env[node.name] = make_func(node.name, node.params, node.body)
+            self.env[node.name] = make_func(node.name, node.params, node.body, node.line)
 
         elif isinstance(node, ClassDef):
             methods = {}
@@ -666,7 +713,7 @@ class Interpreter:
                         return method
                     methods[m.name] = make_method(m.name, m.params, m.body)
                 elif isinstance(m, Assign):
-                    val = safe_eval(m.expr, self.env)
+                    val = eval_expr(m.expr, self.env, line=m.line)
                     methods[m.name] = val
             bases_objs = []
             for bname in node.bases:
@@ -682,7 +729,7 @@ class Interpreter:
         elif isinstance(node, ReturnNode):
             val = None
             if node.expr is not None:
-                val = safe_eval(node.expr, self.env)
+                val = eval_expr(node.expr, self.env, line=node.line)
             raise ReturnSignal(val)
 
         else:
@@ -802,7 +849,6 @@ def transpile_program(prog: Program) -> str:
     out.append("# Transpiled RRL -> Python code")
     for node in prog.body:
         out.extend(transpile_node(node, level=0))
-    # join lines with newlines so the generated Python is valid
     return "\n".join(out) + "\n"
 
 # Centralized set of helper names for filtering from result_env
@@ -814,8 +860,7 @@ def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> 
 
     safe_builtins = dict(SAFE_BUILTINS)
     safe_builtins["__build_class__"] = _builtins.__build_class__
-    # allow imports in transpiled code
-    safe_builtins["__import__"] = _builtins.__import__
+    safe_builtins["__import__"] = _make_safe_import_for_exec()
 
     exec_globals = {"__builtins__": safe_builtins, "math": math}
 
@@ -880,7 +925,7 @@ Control flow: if, match (like switch), loops (repeat, while)
 Functions: def name(params) ... enddef
 Classes: class Name(bases) ... endclass
 RobotSim API: robot.move(meters), robot.rotate(degrees), robot.stop(), robot.position, robot.battery, robot.status
-Import support: import math, import os as myos, from math import sqrt, pi
+Import support: import math, import os as myos, from math import sqrt, pi (subject to ALLOWED_MODULES)
 Collection helpers: list_of(...), tuple_of(...), set_of(...), dict_of(...)
 Use display(...) for output. Type :help for help, :env to see variables, :quit to exit.
 """
@@ -907,7 +952,7 @@ Collections (easy helpers):
     total = 0
     repeat len(arr)
       # example using Python-style indexing
-      # note: safe_eval allows Python list indexing
+      # note: eval_expr allows Python list indexing for created lists
       total = total + arr[_rrl_i]
     endrepeat
     return total
@@ -980,7 +1025,7 @@ def repl():
             continue
 
         if open_blocks == 0:
-            code = "\n".join(buffer)        # preserve line breaks
+            code = "\n".join(buffer)   
             try:
                 res = run_rrl_code(code, capture_output=None, transpile=transpile_mode)
                 if res.get('output'):
@@ -1007,8 +1052,8 @@ def main():
         for o in outs:
             print(o)
     else:
-        print("Usage: python rrl_v0.4_with_imports.py            # start REPL")
-        print("       python rrl_v0.4_with_imports.py file.rrl  # run RRL file")
+        print("Usage: python rrl_v1.1_with_imports.py            # start REPL")
+        print("       python rrl_v1.1_with_imports.py file.rrl  # run RRL file")
 
 if __name__ == "__main__":
     main()

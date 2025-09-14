@@ -3,8 +3,6 @@ import math
 display(math.sqrt(25))
 from math import pi
 display(pi)
-import os as myos
-display(myos.name)
 a = list_of(1,2,3)
 display(a)
 a.append(4)
@@ -14,3 +12,5 @@ def add(a,b)
  return a+b
 enddef
 display(add(2,3))
+import os as myos
+display(myos.name)
