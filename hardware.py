@@ -46,3 +46,76 @@ class Arduino:
         if self.conn:
             self.conn.close()
             print("[Arduino] Connection closed.")
+
+
+class HardwareAdapter:
+    def __init__(self, port="COM3", baudrate=9600, timeout=1):
+        self.arduino = Arduino(port=port, baudrate=baudrate, timeout=timeout)
+
+    def _no_device_error(self):
+        return {
+            "ok": False,
+            "error": {
+                "code": "no_device",
+                "message": "No hardware device connected.",
+            },
+        }
+
+    def _ok(self, **payload):
+        response = {"ok": True}
+        response.update(payload)
+        return response
+
+    def _ensure_connected(self):
+        if not getattr(self.arduino, "conn", None):
+            return self._no_device_error()
+        return None
+
+    def write(self, message):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.write(message)
+        return self._ok()
+
+    def read(self):
+        error = self._ensure_connected()
+        if error:
+            return error
+        data = self.arduino.read()
+        return self._ok(data=data)
+
+    def led_on(self, pin=13):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.led_on(pin=pin)
+        return self._ok()
+
+    def led_off(self, pin=13):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.led_off(pin=pin)
+        return self._ok()
+
+    def motor_start(self, pin=9, speed=255):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.motor_start(pin=pin, speed=speed)
+        return self._ok()
+
+    def motor_stop(self, pin=9):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.motor_stop(pin=pin)
+        return self._ok()
+
+    def close(self):
+        error = self._ensure_connected()
+        if error:
+            return error
+        self.arduino.close()
+        return self._ok()

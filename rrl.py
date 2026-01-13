@@ -5,6 +5,8 @@ import traceback
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
+from hardware import HardwareAdapter
+
 # RRL : Basic Language Logic
 
 # ========== Safe eval env ==========
@@ -486,6 +488,7 @@ class Interpreter:
         self.env: Dict[str, Any] = {}
         self.output = output
         self.env['robot'] = RobotSim()
+        self.env['hardware'] = HardwareAdapter()
         # helpful collection constructors available in RRL
         self.env['list_of'] = _list_of
         self.env['tuple_of'] = _tuple_of
