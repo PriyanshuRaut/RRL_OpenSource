@@ -47,6 +47,23 @@ z = max(1, 5, 3)
 
 ---
 
+## Imports
+
+RRL supports `import` and `from ... import ...` for a limited allowlist of modules. By default, only the following modules are allowed:
+
+* `math`
+* `hardware`
+
+Attempts to import any other module will raise a runtime error.
+
+```rrl
+import math
+from math import sqrt
+import hardware
+```
+
+---
+
 ## If / Elif / Else
 
 Conditional blocks control execution flow.
