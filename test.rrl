@@ -12,5 +12,5 @@ def add(a,b)
  return a+b
 enddef
 display(add(2,3))
-import os as myos
-display(myos.name)
+import time as mytime
+display(mytime.time())

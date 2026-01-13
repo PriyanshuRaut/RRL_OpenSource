@@ -1,15 +1,25 @@
-import serial  # for Arduino serial communication
+import importlib
+import importlib.util
 import time
+
+try:
+    import serial  # for Arduino serial communication
+except Exception:  # pragma: no cover - optional dependency
+    serial = None
 
 class Arduino:
     def __init__(self, port="COM3", baudrate=9600, timeout=1, handshake=True, handshake_timeout=2.0):
-        try:
-            self.conn = serial.Serial(port, baudrate, timeout=timeout)
-            time.sleep(2)  # wait for Arduino to reset
-            print(f"[Arduino] Connected to {port} at {baudrate} baud.")
-        except Exception as e:
-            print("[Arduino] Connection failed:", e)
+        if serial is None:
+            print("[Arduino] pyserial not installed; Arduino unavailable.")
             self.conn = None
+        else:
+            try:
+                self.conn = serial.Serial(port, baudrate, timeout=timeout)
+                time.sleep(2)  # wait for Arduino to reset
+                print(f"[Arduino] Connected to {port} at {baudrate} baud.")
+            except Exception as e:
+                print("[Arduino] Connection failed:", e)
+                self.conn = None
         self.capabilities = {"features": set(), "proto": None, "device": None, "model": None, "fw": None}
         self.capabilities_known = False
         if self.conn and handshake:
@@ -118,9 +128,59 @@ class Arduino:
             print("[Arduino] Connection closed.")
 
 
+class RaspberryPi:
+    def __init__(self, mode="BCM"):
+        self.mode = mode.upper()
+        self.gpio = None
+        self.available = False
+        spec = importlib.util.find_spec("RPi.GPIO")
+        if spec is not None:
+            self.gpio = importlib.import_module("RPi.GPIO")
+            if self.mode == "BOARD":
+                self.gpio.setmode(self.gpio.BOARD)
+            else:
+                self.gpio.setmode(self.gpio.BCM)
+            self.available = True
+
+    def setup_output(self, pin):
+        if not self.available:
+            return False
+        self.gpio.setup(pin, self.gpio.OUT)
+        return True
+
+    def setup_input(self, pin, pull="down"):
+        if not self.available:
+            return False
+        pull = pull.lower()
+        pud = self.gpio.PUD_DOWN if pull == "down" else self.gpio.PUD_UP
+        self.gpio.setup(pin, self.gpio.IN, pull_up_down=pud)
+        return True
+
+    def write(self, pin, value):
+        if not self.available:
+            return False
+        self.gpio.output(pin, self.gpio.HIGH if value else self.gpio.LOW)
+        return True
+
+    def read(self, pin):
+        if not self.available:
+            return None
+        return bool(self.gpio.input(pin))
+
+    def cleanup(self, pin=None):
+        if not self.available:
+            return False
+        if pin is None:
+            self.gpio.cleanup()
+        else:
+            self.gpio.cleanup(pin)
+        return True
+
+
 class HardwareAdapter:
     def __init__(self, port="COM3", baudrate=9600, timeout=1):
         self.arduino = Arduino(port=port, baudrate=baudrate, timeout=timeout)
+        self.raspberry_pi = RaspberryPi()
 
     def _no_device_error(self):
         return {
@@ -139,6 +199,17 @@ class HardwareAdapter:
     def _ensure_connected(self):
         if not getattr(self.arduino, "conn", None):
             return self._no_device_error()
+        return None
+
+    def _ensure_pi(self):
+        if not getattr(self.raspberry_pi, "available", False):
+            return {
+                "ok": False,
+                "error": {
+                    "code": "pi_unavailable",
+                    "message": "Raspberry Pi GPIO not available.",
+                },
+            }
         return None
 
     def write(self, message):
@@ -188,4 +259,39 @@ class HardwareAdapter:
         if error:
             return error
         self.arduino.close()
+        return self._ok()
+
+    def pi_setup_output(self, pin):
+        error = self._ensure_pi()
+        if error:
+            return error
+        self.raspberry_pi.setup_output(pin)
+        return self._ok()
+
+    def pi_setup_input(self, pin, pull="down"):
+        error = self._ensure_pi()
+        if error:
+            return error
+        self.raspberry_pi.setup_input(pin, pull=pull)
+        return self._ok()
+
+    def pi_write(self, pin, value):
+        error = self._ensure_pi()
+        if error:
+            return error
+        self.raspberry_pi.write(pin, value)
+        return self._ok()
+
+    def pi_read(self, pin):
+        error = self._ensure_pi()
+        if error:
+            return error
+        value = self.raspberry_pi.read(pin)
+        return self._ok(value=value)
+
+    def pi_cleanup(self, pin=None):
+        error = self._ensure_pi()
+        if error:
+            return error
+        self.raspberry_pi.cleanup(pin=pin)
         return self._ok()

@@ -10,7 +10,7 @@ from hardware import HardwareAdapter
 # RRL : Basic Language Logic
 
 # ========== Safe eval env ==========
-ALLOWED_MODULES = {"math", "hardware"}
+ALLOWED_MODULES = {"math", "hardware", "time"}
 SAFE_BUILTINS = {
     "abs": abs, "min": min, "max": max, "round": round, "len": len,
     "int": int, "float": float, "str": str, "bool": bool, "range": range,
