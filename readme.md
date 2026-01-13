@@ -53,6 +53,7 @@ RRL supports `import` and `from ... import ...` for a limited allowlist of modul
 
 * `math`
 * `hardware`
+* `time`
 
 Attempts to import any other module will raise a runtime error.
 
@@ -130,6 +131,70 @@ robot.rotate(90)
 robot.stop()
 display(robot)
 ```
+
+---
+
+## Object-Oriented Programming (OOP)
+
+RRL supports core OOP features including classes, methods, inheritance, and `self`.
+
+```rrl
+class Vehicle
+  def __init__(name)
+    self.name = name
+  enddef
+
+  def label()
+    return "Vehicle: " + self.name
+  enddef
+endclass
+
+class Robot(Vehicle)
+  def __init__(name, speed)
+    self.name = name
+    self.speed = speed
+  enddef
+
+  def label()
+    return "Robot: " + self.name + " @ " + str(self.speed)
+  enddef
+endclass
+
+r = Robot("Atlas", 5)
+display(r.label())
+```
+
+---
+
+## Hardware Integration (Arduino & Raspberry Pi)
+
+The `hardware` module exposes a friendly adapter for Arduino serial devices and Raspberry Pi GPIO. If the device is not available, methods return an error payload instead of raising.
+
+### Arduino
+
+```rrl
+import hardware
+
+result = hardware.led_on(13)
+display(result)
+hardware.motor_start(9, 200)
+hardware.motor_stop(9)
+```
+
+Requires `pyserial` on the host system.
+
+### Raspberry Pi
+
+```rrl
+import hardware
+
+hardware.pi_setup_output(18)
+hardware.pi_write(18, True)
+hardware.pi_write(18, False)
+hardware.pi_cleanup(18)
+```
+
+Requires `RPi.GPIO` on Raspberry Pi systems.
 
 ---
 
