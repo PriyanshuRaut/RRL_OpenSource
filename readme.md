@@ -1,4 +1,4 @@
-# RRL Syntax Guide
+# RRL Syntax Guide (v2.0.0)
 
 ## Comments
 Lines starting with `#` or containing `#` are comments.
@@ -38,6 +38,14 @@ display(robot)
 ## Expressions
 
 You can use math expressions and safe built-ins (`abs`, `min`, `max`, `round`, `int`, `float`, `str`, `bool`, `len`, `range`, `math.*`).
+Imports are supported:
+
+```rrl
+import math
+import os as myos
+from math import sqrt, pi
+```
+
 
 ```rrl
 x = math.sqrt(16)

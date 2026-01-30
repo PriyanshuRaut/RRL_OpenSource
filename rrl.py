@@ -868,7 +868,7 @@ def run_rrl_file(filename: str, capture_output: Optional[List[str]] = None, tran
     return run_rrl_code(code, capture_output=capture_output, transpile=transpile)
 
 # ========== REPL ==========
-BANNER = """RRL v1.0 — (transpile mode)
+BANNER = """RRL v2.0.0 — (transpile mode)
 Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, def/enddef, class/endclass, match/case/default/endmatch blocks.
 Assignments: x = 10, obj.attr = value
 Expressions: arithmetic, function calls, method calls, object attributes
@@ -1003,8 +1003,8 @@ def main():
         for o in outs:
             print(o)
     else:
-        print("Usage: python rrl_v1.1_with_imports.py            # start REPL")
-        print("       python rrl_v1.1_with_imports.py file.rrl  # run RRL file")
+        print("Usage: python rrl.py            # start REPL")
+        print("       python rrl.py file.rrl  # run RRL file")
 
 if __name__ == "__main__":
     main()

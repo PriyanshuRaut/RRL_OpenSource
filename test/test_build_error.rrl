@@ -14,5 +14,5 @@ class Rect
 endclass
 
 r = Rect(3,4)
-display(r.area())
-display(r.perimeter())
+display("Area is : ",r.area())
+display("Perimeter is: ",r.perimeter())
