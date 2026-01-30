@@ -5,9 +5,12 @@ import traceback
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict, Any
 
+from hardware import HardwareAdapter
+
 # RRL : Basic Language Logic
 
 # ========== Safe eval env ==========
+ALLOWED_MODULES = {"math", "hardware", "time"}
 SAFE_BUILTINS = {
     "abs": abs, "min": min, "max": max, "round": round, "len": len,
     "int": int, "float": float, "str": str, "bool": bool, "range": range,
@@ -18,6 +21,15 @@ SAFE_BUILTINS = {
     "object": object, "__name__": "__main__",
 }
 SAFE_GLOBALS = {"__builtins__": SAFE_BUILTINS, "math": math}
+
+def _is_allowed_module(module_name: str) -> bool:
+    return module_name.split(".")[0] in ALLOWED_MODULES
+
+def _guard_import(module_name: str, line: Optional[int] = None) -> None:
+    if _is_allowed_module(module_name):
+        return
+    detail = f"[line {line}] " if line is not None else ""
+    raise RRLRuntimeError(f"{detail}import of '{module_name}' is not allowed")
 
 def safe_eval(expr: str, env: Dict[str, Any]) -> Any:
     return eval(expr, SAFE_GLOBALS, env)
@@ -486,6 +498,7 @@ class Interpreter:
         self.env: Dict[str, Any] = {}
         self.output = output
         self.env['robot'] = RobotSim()
+        self.env['hardware'] = HardwareAdapter()
         # helpful collection constructors available in RRL
         self.env['list_of'] = _list_of
         self.env['tuple_of'] = _tuple_of
@@ -536,6 +549,7 @@ class Interpreter:
 
         elif isinstance(node, ImportNode):
             for mod, alias in node.modules:
+                _guard_import(mod, line=node.line)
                 try:
                     imported = __import__(mod, fromlist=['*'])
                 except Exception as e:
@@ -544,6 +558,7 @@ class Interpreter:
                 self.env[name] = imported
 
         elif isinstance(node, FromImportNode):
+            _guard_import(node.module, line=node.line)
             for name, alias in node.names:
                 try:
                     mod_obj = __import__(node.module, fromlist=[name])
@@ -812,7 +827,11 @@ def exec_transpiled(source: str, capture_output: Optional[List[str]] = None) -> 
 
     safe_builtins = dict(SAFE_BUILTINS)
     safe_builtins["__build_class__"] = _builtins.__build_class__
-    safe_builtins["__import__"] = _builtins.__import__
+    def _restricted_import(name, globals=None, locals=None, fromlist=(), level=0):
+        _guard_import(name)
+        return _builtins.__import__(name, globals, locals, fromlist, level)
+
+    safe_builtins["__import__"] = _restricted_import
 
     exec_globals = {"__builtins__": safe_builtins, "math": math}
 
