@@ -14,3 +14,16 @@ enddef
 display(add(2,3))
 import time as mytime
 display(mytime.time())
+
+
+# do while snippet
+x = 0
+do while x < 3
+    display("do while x:", x)
+    x = x + 1
+endwhile
+
+# for snippet
+for n in range(1, 4)
+    display("for n:", n)
+endfor

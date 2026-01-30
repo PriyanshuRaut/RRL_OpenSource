@@ -131,6 +131,17 @@ class WhileBlock(Node):
     body: List[Node]
 
 @dataclass
+class DoWhileBlock(Node):
+    cond_expr: str
+    body: List[Node]
+
+@dataclass
+class ForBlock(Node):
+    var_name: str
+    iterable_expr: str
+    body: List[Node]
+
+@dataclass
 class FunctionDef(Node):
     name: str
     params: List[str]
@@ -266,8 +277,16 @@ class Parser:
                 nodes.append(self.parse_repeat())
                 continue
 
+            if lower.startswith("do while "):
+                nodes.append(self.parse_do_while())
+                continue
+
             if lower.startswith("while "):
                 nodes.append(self.parse_while())
+                continue
+
+            if lower.startswith("for "):
+                nodes.append(self.parse_for())
                 continue
 
             if lower.startswith("def "):
@@ -281,7 +300,7 @@ class Parser:
                 self.advance()
                 continue
 
-            if "=" in line and not lower.startswith(("elif ", "else", "endif", "endrepeat", "endwhile", "enddef", "endclass")):
+            if "=" in line and not lower.startswith(("elif ", "else", "endif", "endrepeat", "endwhile", "endfor", "enddef", "endclass")):
                 left, right = line.split("=", 1)
                 name = left.strip()
                 parts = name.split(".")
@@ -413,6 +432,40 @@ class Parser:
             self.advance()
             return WhileBlock(line=start_line, cond_expr=cond_expr, body=body)
         raise ParserError(f"[line {start_line}] while-block not closed")
+
+    def parse_do_while(self) -> DoWhileBlock:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        cond_expr = header[len("do while "):].strip()
+        if cond_expr == "":
+            raise ParserError(f"[line {start_line}] do while requires a condition")
+        self.advance()
+        body = self.parse_block(stop_tokens=["endwhile"])
+        if self.i < len(self.lines) and strip_comment(self.lines[self.i]).strip().lower() == "endwhile":
+            self.advance()
+            return DoWhileBlock(line=start_line, cond_expr=cond_expr, body=body)
+        raise ParserError(f"[line {start_line}] do while-block not closed")
+
+    def parse_for(self) -> ForBlock:
+        start_line, raw = self.current()
+        header = strip_comment(raw).strip()
+        rest = header[len("for "):].strip()
+        lower_rest = rest.lower()
+        idx = lower_rest.find(" in ")
+        if idx == -1:
+            raise ParserError(f"[line {start_line}] for-loop requires 'in' keyword")
+        var_name = rest[:idx].strip()
+        iterable_expr = rest[idx+4:].strip()
+        if not var_name.isidentifier():
+            raise ParserError(f"[line {start_line}] invalid for-loop variable: {var_name}")
+        if iterable_expr == "":
+            raise ParserError(f"[line {start_line}] for-loop requires an iterable expression")
+        self.advance()
+        body = self.parse_block(stop_tokens=["endfor"])
+        if self.i < len(self.lines) and strip_comment(self.lines[self.i]).strip().lower() == "endfor":
+            self.advance()
+            return ForBlock(line=start_line, var_name=var_name, iterable_expr=iterable_expr, body=body)
+        raise ParserError(f"[line {start_line}] for-loop not closed")
 
     def parse_class(self) -> ClassDef:
         start_line, raw = self.current()
@@ -664,6 +717,33 @@ class Interpreter:
                 if iterations > MAX_ITER:
                     raise RRLRuntimeError(f"[line {node.line}] while-loop exceeded {MAX_ITER} iterations")
 
+        elif isinstance(node, DoWhileBlock):
+            iterations = 0
+            MAX_ITER = 1_000_000
+            while True:
+                self.exec_block(node.body)
+                iterations += 1
+                if iterations > MAX_ITER:
+                    raise RRLRuntimeError(f"[line {node.line}] do while-loop exceeded {MAX_ITER} iterations")
+                cond = eval_expr(node.cond_expr, self.env, line=node.line)
+                if not cond:
+                    break
+
+        elif isinstance(node, ForBlock):
+            iterations = 0
+            MAX_ITER = 1_000_000
+            iterable = eval_expr(node.iterable_expr, self.env, line=node.line)
+            try:
+                iterator = iter(iterable)
+            except Exception as e:
+                raise RRLRuntimeError(f"[line {node.line}] for-loop expects iterable, got: {iterable}") from e
+            for value in iterator:
+                self.env[node.var_name] = value
+                self.exec_block(node.body)
+                iterations += 1
+                if iterations > MAX_ITER:
+                    raise RRLRuntimeError(f"[line {node.line}] for-loop exceeded {MAX_ITER} iterations")
+
         elif isinstance(node, FunctionDef):
             def make_func(name, params, body, def_line):
                 def fn(*args):
@@ -812,6 +892,19 @@ def transpile_node(node: Node, level: int = 0, in_class: bool = False) -> List[s
         for n in node.body:
             lines.extend(transpile_node(n, level+1, in_class=in_class))
 
+    elif isinstance(node, DoWhileBlock):
+        lines.append(f"{ind}while True:")
+        for n in node.body:
+            lines.extend(transpile_node(n, level+1, in_class=in_class))
+        inner_ind = _indent(level + 1)
+        lines.append(f"{inner_ind}if not ({node.cond_expr}):")
+        lines.append(f"{inner_ind}    break")
+
+    elif isinstance(node, ForBlock):
+        lines.append(f"{ind}for {node.var_name} in {node.iterable_expr}:")
+        for n in node.body:
+            lines.extend(transpile_node(n, level+1, in_class=in_class))
+
     elif isinstance(node, FunctionDef):
         params = ", ".join(node.params)
         if in_class:
@@ -918,10 +1011,10 @@ def run_rrl_file(filename: str, capture_output: Optional[List[str]] = None, tran
 
 # ========== REPL ==========
 BANNER = """RRL v2.0.0 — (transpile mode)
-Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, def/enddef, class/endclass, match/case/default/endmatch blocks.
+Blocks: if/elif/else/endif, repeat/endrepeat, while/endwhile, do while/endwhile, for/endfor, def/enddef, class/endclass, match/case/default/endmatch blocks.
 Assignments: x = 10, obj.attr = value
 Expressions: arithmetic, function calls, method calls, object attributes
-Control flow: if, match (like switch), loops (repeat, while)
+Control flow: if, match (like switch), loops (repeat, while, do while, for)
 Functions: def name(params) ... enddef
 Classes: class Name(bases) ... endclass
 RobotSim API: robot.move(meters), robot.rotate(degrees), robot.stop(), robot.position, robot.battery, robot.status
@@ -971,7 +1064,9 @@ def repl():
         t = strip_comment(text_line).strip().lower()
         if t.startswith("if "): return 1
         if t.startswith("while "): return 1
+        if t.startswith("do while "): return 1
         if t.startswith("repeat "): return 1
+        if t.startswith("for "): return 1
         if t.startswith("def "): return 1
         if t.startswith("class "): return 1
         if t == "else": return 0
@@ -979,6 +1074,7 @@ def repl():
         if t == "endif": return -1
         if t == "endwhile": return -1
         if t == "endrepeat": return -1
+        if t == "endfor": return -1
         if t == "enddef": return -1
         if t == "endclass": return -1
         return 0

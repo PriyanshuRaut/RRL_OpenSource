@@ -114,6 +114,31 @@ endwhile
 
 ---
 
+## Do While Loop
+
+Runs the body at least once, then repeats while the condition is true. Limited to **1,000,000 iterations** for safety.
+
+```rrl
+do while x < 3
+  display("x:", x)
+  x = x + 1
+endwhile
+```
+
+---
+
+## For Loop
+
+Iterates over any iterable expression (e.g., `range`, lists, tuples).
+
+```rrl
+for n in range(1, 4)
+  display("n:", n)
+endfor
+```
+
+---
+
 ## Functions
 
 Define reusable code blocks with parameters and return values.
